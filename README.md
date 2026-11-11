@@ -10,17 +10,21 @@ With the player **inside the server**, on the PC they are showing, open PowerShe
 irm https://raw.githubusercontent.com/Elomcraft/antifaker/main/AntiFaker.ps1 | iex
 ```
 
-That's it: nothing is installed or saved. It prints `Checking for Faker...` and, after 20-60 seconds, the result:
+That's it: nothing is installed or saved. It shows a progress bar and, after 20-60 seconds, the result:
 
 ```
-Checking for Faker...
-No Faker found
-```
+    _     _   _  _____  ___    _____     _     _  __ _____  ____
+   / \   | \ | ||_   _||_ _|  |  ___|   / \   | |/ /| ____||  _ \
+  / _ \  |  \| |  | |   | |   | |_     / _ \  | ' / |  _|  | |_) |
+ / ___ \ | |\  |  | |   | |   |  _|   / ___ \ | . \ | |___ |  _ <
+/_/   \_\|_| \_|  |_|  |___|  |_|    /_/   \_\|_|\_\|_____||_| \_\
 
-```
-Checking for Faker...
-FAKER FOUND
-  - Port 25565: connections to non-existent IPs succeed (...). Something on the network diverts the server port to a proxy: Faker.
+  Checking for Faker... [########################] 100%  done
+
+  +-----------------+
+  |   FAKER FOUND   |
+  +-----------------+
+   - Port 25565: connections to non-existent IPs succeed (...). Something on the network diverts the server port to a proxy: Faker.
 ```
 
 If `irm` is not recognized (you are in CMD instead of PowerShell) or you get a TLS error (older Windows 10), use this one instead. It works from CMD, Win+R or PowerShell and does not need `irm`:

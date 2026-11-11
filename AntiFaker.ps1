@@ -57,7 +57,7 @@ $ErrorActionPreference = "SilentlyContinue"
 $ProgressPreference = "SilentlyContinue"
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 
-$script:Version = "1.2.0"
+$script:Version = "1.3.0"
 $script:Lines = New-Object System.Collections.Generic.List[string]
 $script:Findings = New-Object System.Collections.Generic.List[object]
 
@@ -178,10 +178,52 @@ function Test-Private([string]$Ip) {
 }
 
 # --------------------------------------------------------------------------
+# Banner and progress
+# --------------------------------------------------------------------------
+function Show-Banner {
+    $art = @(
+        '    _     _   _  _____  ___    _____     _     _  __ _____  ____',
+        '   / \   | \ | ||_   _||_ _|  |  ___|   / \   | |/ /| ____||  _ \',
+        '  / _ \  |  \| |  | |   | |   | |_     / _ \  | '' / |  _|  | |_) |',
+        ' / ___ \ | |\  |  | |   | |   |  _|   / ___ \ | . \ | |___ |  _ <',
+        '/_/   \_\|_| \_|  |_|  |___|  |_|    /_/   \_\|_|\_\|_____||_| \_\'
+    )
+    $colors = @("DarkRed", "Red", "Red", "Magenta", "DarkMagenta")
+    Write-Host ""
+    for ($i = 0; $i -lt $art.Count; $i++) { Write-Host ("  " + $art[$i]) -ForegroundColor $colors[$i] }
+    Write-Host ""
+    Write-Host ("  " + ("=" * 66)) -ForegroundColor DarkGray
+    Write-Host "     Faker detector for Minecraft screenshares" -NoNewline -ForegroundColor White
+    Write-Host ("   v" + $script:Version) -ForegroundColor DarkGray
+    Write-Host "     github.com/Elomcraft/antifaker" -ForegroundColor DarkGray
+    Write-Host ("  " + ("=" * 66)) -ForegroundColor DarkGray
+    Write-Host ""
+}
+
+$script:StepCount = 5
+function Show-Step([int]$Step, [string]$What) {
+    if ($Details) { return }
+    $width = 24
+    $filled = [int][math]::Floor($width * $Step / $script:StepCount)
+    $bar = ("#" * $filled) + ("." * ($width - $filled))
+    $pct = [int](100 * $Step / $script:StepCount)
+    $line = "  Checking for Faker... [" + $bar + "] " + ("{0,3}" -f $pct) + "%  " + $What
+    Write-Host ("`r" + $line.PadRight(78)) -NoNewline -ForegroundColor Cyan
+}
+
+function Show-Box([string]$Text, [string]$Color) {
+    $inner = $Text.Length + 6
+    $edge = "  +" + ("-" * $inner) + "+"
+    Write-Host $edge -ForegroundColor $Color
+    Write-Host ("  |   " + $Text + "   |") -ForegroundColor $Color
+    Write-Host $edge -ForegroundColor $Color
+}
+
+# --------------------------------------------------------------------------
 # Start
 # --------------------------------------------------------------------------
-Write-Host ""
-Write-Host "Checking for Faker..." -ForegroundColor Cyan
+Show-Banner
+Show-Step 0 "starting"
 Out-Line ("AntiFaker " + $script:Version + " - " + (Get-Date -Format "yyyy-MM-dd HH:mm:ss")) "White"
 Out-Line ("Computer: " + $env:COMPUTERNAME + "   User: " + $env:USERNAME) "White"
 if (-not $script:IsWin) {
@@ -191,6 +233,7 @@ if (-not $script:IsWin) {
 # --------------------------------------------------------------------------
 # 0. Minecraft connections
 # --------------------------------------------------------------------------
+Show-Step 0 "finding the game"
 Out-Title "Minecraft connections"
 $targets = New-Object System.Collections.Generic.List[object]
 
@@ -258,6 +301,7 @@ if (Test-Cmd "Get-NetTCPConnection") {
 # --------------------------------------------------------------------------
 # 1. Bait: non-existent IPs on the server port
 # --------------------------------------------------------------------------
+Show-Step 1 "bait test"
 Out-Title "1. Bait (non-existent IPs on the server port)"
 $baits = @("192.0.2.1", "198.51.100.1", "203.0.113.1")
 $baitPorts = New-Object System.Collections.Generic.List[int]
@@ -290,6 +334,7 @@ if ($controlConnected -gt 0) {
 # --------------------------------------------------------------------------
 # 2. Latency: connection to the server vs ping to the same IP
 # --------------------------------------------------------------------------
+Show-Step 2 "server latency"
 Out-Title "2. Server latency"
 $gw = $null
 if (Test-Cmd "Get-NetIPConfiguration") {
@@ -338,6 +383,7 @@ foreach ($t in $targets) {
 # --------------------------------------------------------------------------
 # 3. Network: another PC's hotspot
 # --------------------------------------------------------------------------
+Show-Step 3 "network"
 Out-Title "3. Network"
 $hotspotPattern = '^(DESKTOP|LAPTOP|PC|WIN)-[A-Z0-9]{5,15} \d{4}$'
 if ($script:IsWin) {
@@ -427,6 +473,7 @@ if ($script:IsWin) {
 # --------------------------------------------------------------------------
 # 4. Faker traces on this PC
 # --------------------------------------------------------------------------
+Show-Step 4 "traces on this PC"
 Out-Title "4. Faker traces on this PC"
 if ($script:IsWin) {
     try {
@@ -491,29 +538,31 @@ $hints = @($script:Findings | Where-Object { $_.Level -eq 1 }).Count
 if ($max -ge 3) {
     $verdict = "FAKER FOUND"; $color = "Red"
 } elseif ($strong -ge 2 -or ($strong -ge 1 -and $hints -ge 1)) {
-    $verdict = "VERY LIKELY FAKER (this PC goes through another PC and/or a proxy answers the server connection)"; $color = "Magenta"
+    $verdict = "VERY LIKELY FAKER"; $color = "Magenta"
 } elseif ($strong -ge 1 -or $hints -ge 2) {
-    $verdict = "SUSPICIOUS (possible Faker, check the reasons)"; $color = "Yellow"
+    $verdict = "SUSPICIOUS - possible Faker"; $color = "Yellow"
 } else {
     $verdict = "No Faker found"; $color = "Green"
 }
-if ($Details) { Write-Host ""; Write-Host "== Verdict ==" -ForegroundColor Cyan }
+Show-Step 5 "done"
+Write-Host ""
+Write-Host ""
 $script:Lines.Add(""); $script:Lines.Add("== Verdict ==")
-Write-Host $verdict -ForegroundColor $color
+Show-Box $verdict $color
 $script:Lines.Add($verdict)
 if (-not $Details) {
     foreach ($h in ($script:Findings | Sort-Object Level -Descending)) {
-        Write-Host ("  - " + $h.Text) -ForegroundColor Gray
+        Write-Host ("   - " + $h.Text) -ForegroundColor Gray
     }
 }
 if ($script:BaitInvalid) {
     $note = "Note: this network intercepts every port (antivirus/VPN/proxy), so the main test could not run. Disable it and run again."
-    Write-Host $note -ForegroundColor Yellow
+    Write-Host ("   " + $note) -ForegroundColor Yellow
     $script:Lines.Add($note)
 }
 if ($targets.Count -eq 0) {
     $note = "Note: the player is not in a server, so only the default port 25565 was tested. Have them join the server and run it again."
-    Write-Host $note -ForegroundColor Yellow
+    Write-Host ("   " + $note) -ForegroundColor Yellow
     $script:Lines.Add($note)
 }
 
