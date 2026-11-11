@@ -28,8 +28,10 @@
        Windows hotspot SSID, double NAT, history of hotspot networks.
     4. Faker traces on THIS PC (in case they show the wrong PC).
 
-  Usage:
+  Usage (prints "Checking for Faker..." and then only the result):
     irm https://raw.githubusercontent.com/Elomcraft/antifaker/main/AntiFaker.ps1 | iex
+  Full step-by-step output:
+    & ([scriptblock]::Create((irm https://raw.githubusercontent.com/Elomcraft/antifaker/main/AntiFaker.ps1))) -Details
     & ([scriptblock]::Create((irm https://raw.githubusercontent.com/Elomcraft/antifaker/main/AntiFaker.ps1))) -Server play.example.com
     powershell -ExecutionPolicy Bypass -File .\AntiFaker.ps1   (local copy)
 #>
@@ -42,15 +44,20 @@ param(
     # Extra ports to test with the bait.
     [Alias("Puertos")]
     [int[]]$Ports = @(),
-    # Do not save the report to the desktop.
-    [Alias("SinInforme")]
-    [switch]$NoReport
+    # Show every test while it runs.
+    [switch]$Details,
+    # Also save the full report to the desktop.
+    [switch]$Report
 )
 
-$ErrorActionPreference = "Continue"
+# Keep the caller's session clean (this also runs through "irm | iex")
+$script:OldEap = $ErrorActionPreference
+$script:OldProgress = $ProgressPreference
+$ErrorActionPreference = "SilentlyContinue"
+$ProgressPreference = "SilentlyContinue"
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 
-$script:Version = "1.1.0"
+$script:Version = "1.2.0"
 $script:Lines = New-Object System.Collections.Generic.List[string]
 $script:Findings = New-Object System.Collections.Generic.List[object]
 
@@ -58,7 +65,7 @@ $script:Findings = New-Object System.Collections.Generic.List[object]
 # Output
 # --------------------------------------------------------------------------
 function Out-Line([string]$Text, [string]$Color = "Gray") {
-    Write-Host $Text -ForegroundColor $Color
+    if ($Details) { Write-Host $Text -ForegroundColor $Color }
     $script:Lines.Add($Text)
 }
 
@@ -173,6 +180,8 @@ function Test-Private([string]$Ip) {
 # --------------------------------------------------------------------------
 # Start
 # --------------------------------------------------------------------------
+Write-Host ""
+Write-Host "Checking for Faker..." -ForegroundColor Cyan
 Out-Line ("AntiFaker " + $script:Version + " - " + (Get-Date -Format "yyyy-MM-dd HH:mm:ss")) "White"
 Out-Line ("Computer: " + $env:COMPUTERNAME + "   User: " + $env:USERNAME) "White"
 if (-not $script:IsWin) {
@@ -260,6 +269,7 @@ while ($baitPorts.Contains($controlPort)) { $controlPort++ }
 
 $control = @($baits | ForEach-Object { Measure-Tcp $_ $controlPort 1500 })
 $controlConnected = @($control | Where-Object { $_.State -eq "Connected" }).Count
+$script:BaitInvalid = ($controlConnected -gt 0)
 if ($controlConnected -gt 0) {
     Out-Line ("  The network intercepts ANY port (control port " + $controlPort + " also connects). Bait test not valid.") "Yellow"
     Out-Line "  (Antivirus/firewall/VPN with a transparent proxy.) Check the other tests." "Yellow"
@@ -472,31 +482,50 @@ if ($script:IsWin) {
 }
 
 # --------------------------------------------------------------------------
-# Verdict
+# Verdict (always printed)
 # --------------------------------------------------------------------------
-Out-Title "Verdict"
 $max = 0
 foreach ($h in $script:Findings) { if ($h.Level -gt $max) { $max = $h.Level } }
 $strong = @($script:Findings | Where-Object { $_.Level -ge 2 }).Count
 $hints = @($script:Findings | Where-Object { $_.Level -eq 1 }).Count
 if ($max -ge 3) {
-    Out-Line "  FAKER DETECTED: a proxy is diverting the Minecraft connection." "Red"
+    $verdict = "FAKER FOUND"; $color = "Red"
 } elseif ($strong -ge 2 -or ($strong -ge 1 -and $hints -ge 1)) {
-    Out-Line "  VERY SUSPICIOUS: this PC reaches the Internet through another PC and/or the connection is answered by a proxy." "Magenta"
+    $verdict = "VERY LIKELY FAKER (this PC goes through another PC and/or a proxy answers the server connection)"; $color = "Magenta"
 } elseif ($strong -ge 1 -or $hints -ge 2) {
-    Out-Line "  SUSPICIOUS: review the findings and ask the player about their network." "Yellow"
+    $verdict = "SUSPICIOUS (possible Faker, check the reasons)"; $color = "Yellow"
 } else {
-    Out-Line "  No sign of Faker." "Green"
+    $verdict = "No Faker found"; $color = "Green"
+}
+if ($Details) { Write-Host ""; Write-Host "== Verdict ==" -ForegroundColor Cyan }
+$script:Lines.Add(""); $script:Lines.Add("== Verdict ==")
+Write-Host $verdict -ForegroundColor $color
+$script:Lines.Add($verdict)
+if (-not $Details) {
+    foreach ($h in ($script:Findings | Sort-Object Level -Descending)) {
+        Write-Host ("  - " + $h.Text) -ForegroundColor Gray
+    }
+}
+if ($script:BaitInvalid) {
+    $note = "Note: this network intercepts every port (antivirus/VPN/proxy), so the main test could not run. Disable it and run again."
+    Write-Host $note -ForegroundColor Yellow
+    $script:Lines.Add($note)
 }
 if ($targets.Count -eq 0) {
-    Out-Line "  NOTE: no server was measured. Run again with the player inside the server." "Yellow"
+    $note = "Note: the player is not in a server, so only the default port 25565 was tested. Have them join the server and run it again."
+    Write-Host $note -ForegroundColor Yellow
+    $script:Lines.Add($note)
 }
 
-if (-not $NoReport -and $script:IsWin) {
+if ($Report -and $script:IsWin) {
     try {
         $desk = [Environment]::GetFolderPath("Desktop")
         $path = Join-Path $desk ("AntiFaker_" + (Get-Date -Format "yyyyMMdd_HHmmss") + ".txt")
         $script:Lines | Set-Content -Path $path -Encoding UTF8
-        Out-Line ("Report saved to " + $path) "White"
+        Write-Host ("Report saved to " + $path) -ForegroundColor White
     } catch {}
 }
+Write-Host ""
+
+$ErrorActionPreference = $script:OldEap
+$ProgressPreference = $script:OldProgress

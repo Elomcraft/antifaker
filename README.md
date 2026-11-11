@@ -2,12 +2,25 @@
 
 Detects **Faker** ([o1seth/faker](https://github.com/o1seth/faker)) during Minecraft screenshares.
 
-## Quick start
+## Usage
 
 With the player **inside the server**, on the PC they are showing, open PowerShell (Win+X → Terminal) and paste:
 
 ```powershell
 irm https://raw.githubusercontent.com/Elomcraft/antifaker/main/AntiFaker.ps1 | iex
+```
+
+That's it: nothing is installed or saved. It prints `Checking for Faker...` and, after 20-60 seconds, the result:
+
+```
+Checking for Faker...
+No Faker found
+```
+
+```
+Checking for Faker...
+FAKER FOUND
+  - Port 25565: connections to non-existent IPs succeed (...). Something on the network diverts the server port to a proxy: Faker.
 ```
 
 If you get a TLS error (older Windows 10), use this one instead. It also works from Win+R or CMD:
@@ -16,15 +29,15 @@ If you get a TLS error (older Windows 10), use this one instead. It also works f
 powershell -ep bypass -c "[Net.ServicePointManager]::SecurityProtocol='Tls12'; irm https://raw.githubusercontent.com/Elomcraft/antifaker/main/AntiFaker.ps1 | iex"
 ```
 
-To give the server by hand (if it is not detected automatically):
+### Options
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Elomcraft/antifaker/main/AntiFaker.ps1))) -Server play.yourserver.com
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Elomcraft/antifaker/main/AntiFaker.ps1))) -Details -Server play.yourserver.com -Report
 ```
 
-No administrator rights needed (as administrator it also checks Prefetch). It takes 20 to 60 seconds, prints a verdict and saves an `AntiFaker_*.txt` report to the desktop.
-
-**Offline / no commands:** download [AntiFaker.bat](https://github.com/Elomcraft/antifaker/raw/main/AntiFaker.bat) and [AntiFaker.ps1](https://github.com/Elomcraft/antifaker/raw/main/AntiFaker.ps1) into the same folder and double-click the `.bat`.
+- `-Details`: show every test while it runs.
+- `-Server host[:port]`: the server, if it is not detected automatically.
+- `-Report`: also save the full report to the desktop.
 
 ## What Faker is
 
@@ -41,10 +54,10 @@ Faker is a man-in-the-middle proxy. The player cheats on one PC and shows the st
 
 ## Verdicts
 
-- **FAKER DETECTED**: the bait connected, or Faker files/process were found.
-- **VERY SUSPICIOUS**: several strong findings (latency, shared-PC network...).
+- **FAKER FOUND**: the bait connected, or Faker files/process were found.
+- **VERY LIKELY FAKER**: several strong findings (latency, shared-PC network...).
 - **SUSPICIOUS**: loose hints; ask the player about their network.
-- **No sign of Faker**.
+- **No Faker found**.
 
 ## Limits
 
@@ -55,4 +68,4 @@ Faker is a man-in-the-middle proxy. The player cheats on one PC and shows the st
 
 ## Safety
 
-The script only **reads**: it installs nothing, changes no settings and sends no data anywhere (its only connections are the tests to the server, the bait IPs, 1.1.1.1 for the traceroute and the gateway). It is a single text file you can read in full before running it.
+The script only **reads**: it installs nothing, changes no settings and sends no data anywhere (its only connections are the tests to the server, the bait IPs, 1.1.1.1 for the traceroute and the gateway). It is a single text file you can read in full before running it, and by default it writes nothing to disk.
