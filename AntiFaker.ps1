@@ -1,164 +1,169 @@
 <#
-  AntiFaker - deteccion de Faker (proxy MITM de o1seth) para screenshare.
+  AntiFaker - detects Faker (o1seth's MITM proxy) during Minecraft screenshares.
 
-  Se ejecuta en el PC que el jugador ensena en el screenshare (el "limpio"),
-  CON EL JUGADOR CONECTADO AL SERVER. No necesita administrador.
+  Run it on the PC the player is showing (the "clean" one) WHILE THE PLAYER IS
+  CONNECTED TO THE SERVER. No administrator rights needed.
 
-  Como funciona Faker (leido de su codigo, v1.8):
-    - Un PC con el cheat crea un punto de acceso Wi-Fi; el PC limpio se conecta
-      a el y sale a Internet a traves de ese PC.
-    - Con WinDivert, ese PC desvia a su proxy local TODA conexion TCP que pase
-      por el al puerto del server (25565 o el del SRV), sea cual sea la IP de
-      destino (filtro "tcp.DstPort == puerto", sin mirar la IP).
-    - Su retardo artificial solo se aplica a paquetes ACK con datos; el SYN-ACK
-      del proxy sale al momento.
+  How Faker works (read from its source code, v1.8):
+    - The cheating PC creates a Wi-Fi hotspot; the clean PC connects to it and
+      reaches the Internet through that PC.
+    - Using WinDivert, the cheating PC diverts to its local proxy EVERY TCP
+      connection that goes through it to the server port (25565 or the SRV
+      port), whatever the destination IP (filter "tcp.DstPort == port", the IP
+      is never checked).
+    - Its artificial delay only holds back ACK packets carrying data; the
+      proxy's SYN-ACK is sent immediately.
 
-  Pruebas (de mas a menos fuerte):
-    1. Cebo: conectar a IPs de documentacion (RFC 5737) que no existen en
-       Internet, al puerto del server. Sin nada en medio, NUNCA conecta. Con
-       Faker conecta en milisegundos. Se repite en un puerto de control: si el
-       control tambien conecta, la red lo intercepta todo y no se acusa a nadie.
-    2. Latencia: el server responde a la conexion mucho antes de lo que tarda
-       un ping a esa misma IP => la conexion la contesta alguien en la red local.
-    3. Red: puerta de enlace de "Conexion compartida" de Windows, sufijo
-       mshome.net, MAC de la puerta de enlace administrada localmente, BSSID
-       igual a la puerta de enlace, SSID por defecto de punto de acceso de
-       Windows, doble NAT, historial de redes de punto de acceso.
-    4. Rastros de Faker en ESTE PC (por si ensenan el PC equivocado).
+  Tests (strongest first):
+    1. Bait: connect to documentation IPs (RFC 5737) that do not exist on the
+       Internet, on the server port. With nothing in between this NEVER
+       connects. Behind Faker it connects within milliseconds. A control port is
+       tried as well: if the control also connects, the network intercepts
+       everything and nobody is blamed.
+    2. Latency: the server answers the TCP connection much faster than a ping to
+       that same IP => the connection is answered by something on the local
+       network.
+    3. Network: Windows "Internet Connection Sharing" gateway, mshome.net suffix,
+       locally administered gateway MAC, BSSID equal to the gateway, default
+       Windows hotspot SSID, double NAT, history of hotspot networks.
+    4. Faker traces on THIS PC (in case they show the wrong PC).
 
-  Uso:
+  Usage:
     irm https://raw.githubusercontent.com/Elomcraft/antifaker/main/AntiFaker.ps1 | iex
-    & ([scriptblock]::Create((irm https://raw.githubusercontent.com/Elomcraft/antifaker/main/AntiFaker.ps1))) -Servidor play.ejemplo.com
-    powershell -ExecutionPolicy Bypass -File .\AntiFaker.ps1   (copia local)
+    & ([scriptblock]::Create((irm https://raw.githubusercontent.com/Elomcraft/antifaker/main/AntiFaker.ps1))) -Server play.example.com
+    powershell -ExecutionPolicy Bypass -File .\AntiFaker.ps1   (local copy)
 #>
 [CmdletBinding()]
 param(
-    # Server al que juega (host o host:puerto). Opcional: si el juego esta
-    # conectado se detecta solo.
-    [string]$Servidor = "",
-    # Puertos extra a probar con el cebo.
-    [int[]]$Puertos = @(),
-    # No guardar el informe en el escritorio.
-    [switch]$SinInforme
+    # Server being played on (host or host:port). Optional: detected
+    # automatically when the game is connected.
+    [Alias("Servidor")]
+    [string]$Server = "",
+    # Extra ports to test with the bait.
+    [Alias("Puertos")]
+    [int[]]$Ports = @(),
+    # Do not save the report to the desktop.
+    [Alias("SinInforme")]
+    [switch]$NoReport
 )
 
 $ErrorActionPreference = "Continue"
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 
-$script:Version = "1.0.0"
-$script:Lineas = New-Object System.Collections.Generic.List[string]
-$script:Hallazgos = New-Object System.Collections.Generic.List[object]
+$script:Version = "1.1.0"
+$script:Lines = New-Object System.Collections.Generic.List[string]
+$script:Findings = New-Object System.Collections.Generic.List[object]
 
 # --------------------------------------------------------------------------
-# Salida
+# Output
 # --------------------------------------------------------------------------
-function Out-Linea([string]$Texto, [string]$Color = "Gray") {
-    Write-Host $Texto -ForegroundColor $Color
-    $script:Lineas.Add($Texto)
+function Out-Line([string]$Text, [string]$Color = "Gray") {
+    Write-Host $Text -ForegroundColor $Color
+    $script:Lines.Add($Text)
 }
 
-function Out-Titulo([string]$Texto) {
-    Out-Linea ""
-    Out-Linea ("== " + $Texto + " ==") "Cyan"
+function Out-Title([string]$Text) {
+    Out-Line ""
+    Out-Line ("== " + $Text + " ==") "Cyan"
 }
 
-# Nivel: 3 = definitivo, 2 = fuerte, 1 = indicio
-function Add-Hallazgo([int]$Nivel, [string]$Texto) {
-    $script:Hallazgos.Add([pscustomobject]@{ Nivel = $Nivel; Texto = $Texto })
-    switch ($Nivel) {
-        3 { Out-Linea ("  [DETECTADO] " + $Texto) "Red" }
-        2 { Out-Linea ("  [FUERTE]    " + $Texto) "Magenta" }
-        default { Out-Linea ("  [INDICIO]   " + $Texto) "Yellow" }
+# Level: 3 = definitive, 2 = strong, 1 = hint
+function Add-Finding([int]$Level, [string]$Text) {
+    $script:Findings.Add([pscustomobject]@{ Level = $Level; Text = $Text })
+    switch ($Level) {
+        3 { Out-Line ("  [DETECTED] " + $Text) "Red" }
+        2 { Out-Line ("  [STRONG]   " + $Text) "Magenta" }
+        default { Out-Line ("  [HINT]     " + $Text) "Yellow" }
     }
 }
 
-function Out-Ok([string]$Texto) { Out-Linea ("  [ok] " + $Texto) "Green" }
-function Out-Info([string]$Texto) { Out-Linea ("  " + $Texto) "Gray" }
+function Out-Ok([string]$Text) { Out-Line ("  [ok] " + $Text) "Green" }
+function Out-Info([string]$Text) { Out-Line ("  " + $Text) "Gray" }
 
-function Test-Cmd([string]$Nombre) {
-    return [bool](Get-Command $Nombre -ErrorAction SilentlyContinue)
+function Test-Cmd([string]$Name) {
+    return [bool](Get-Command $Name -ErrorAction SilentlyContinue)
 }
 
-$script:EsWindows = ($env:OS -eq "Windows_NT")
+$script:IsWin = ($env:OS -eq "Windows_NT")
 
 # --------------------------------------------------------------------------
-# Red: conexiones TCP cronometradas y ping
+# Network: timed TCP connections and ping
 # --------------------------------------------------------------------------
 
-# Devuelve: Estado = Conecta | Rechaza | Inalcanzable | Tiempo ; Ms = tiempo
-function Measure-Tcp([string]$Ip, [int]$Puerto, [int]$TimeoutMs = 1500) {
-    $cliente = New-Object System.Net.Sockets.TcpClient
-    $reloj = [System.Diagnostics.Stopwatch]::StartNew()
-    $estado = "Tiempo"
+# Returns: State = Connected | Refused | Unreachable | Timeout ; Ms = time
+function Measure-Tcp([string]$Ip, [int]$Port, [int]$TimeoutMs = 1500) {
+    $client = New-Object System.Net.Sockets.TcpClient
+    $clock = [System.Diagnostics.Stopwatch]::StartNew()
+    $state = "Timeout"
     try {
-        $tarea = $cliente.ConnectAsync($Ip, $Puerto)
-        $acabo = $false
-        try { $acabo = $tarea.Wait($TimeoutMs) } catch { $acabo = $true }
-        $reloj.Stop()
-        if (-not $acabo) {
-            $estado = "Tiempo"
-        } elseif ($tarea.Status -eq "RanToCompletion" -and $cliente.Connected) {
-            $estado = "Conecta"
+        $task = $client.ConnectAsync($Ip, $Port)
+        $done = $false
+        try { $done = $task.Wait($TimeoutMs) } catch { $done = $true }
+        $clock.Stop()
+        if (-not $done) {
+            $state = "Timeout"
+        } elseif ($task.Status -eq "RanToCompletion" -and $client.Connected) {
+            $state = "Connected"
         } else {
-            $estado = "Inalcanzable"
-            $ex = $tarea.Exception
+            $state = "Unreachable"
+            $ex = $task.Exception
             while ($ex -ne $null -and -not ($ex -is [System.Net.Sockets.SocketException])) { $ex = $ex.InnerException }
             if ($ex -ne $null -and $ex.SocketErrorCode -eq [System.Net.Sockets.SocketError]::ConnectionRefused) {
-                $estado = "Rechaza"
+                $state = "Refused"
             }
         }
     } finally {
-        if ($reloj.IsRunning) { $reloj.Stop() }
-        try { $cliente.Close() } catch {}
+        if ($clock.IsRunning) { $clock.Stop() }
+        try { $client.Close() } catch {}
     }
-    return [pscustomobject]@{ Estado = $estado; Ms = [math]::Round($reloj.Elapsed.TotalMilliseconds, 1) }
+    return [pscustomobject]@{ State = $state; Ms = [math]::Round($clock.Elapsed.TotalMilliseconds, 1) }
 }
 
-# Minimo de varias conexiones (solo las que conectan o rechazan miden ida y vuelta)
-function Measure-TcpMin([string]$Ip, [int]$Puerto, [int]$Veces = 5) {
-    $mejor = $null
-    $estados = @()
-    for ($i = 0; $i -lt $Veces; $i++) {
-        $r = Measure-Tcp $Ip $Puerto 2000
-        $estados += $r.Estado
-        if ($r.Estado -eq "Conecta" -or $r.Estado -eq "Rechaza") {
-            if ($mejor -eq $null -or $r.Ms -lt $mejor) { $mejor = $r.Ms }
-        } elseif ($r.Estado -eq "Tiempo") {
+# Minimum over several connections (only connected/refused ones measure a round trip)
+function Measure-TcpMin([string]$Ip, [int]$Port, [int]$Times = 5) {
+    $best = $null
+    $states = @()
+    for ($i = 0; $i -lt $Times; $i++) {
+        $r = Measure-Tcp $Ip $Port 2000
+        $states += $r.State
+        if ($r.State -eq "Connected" -or $r.State -eq "Refused") {
+            if ($best -eq $null -or $r.Ms -lt $best) { $best = $r.Ms }
+        } elseif ($r.State -eq "Timeout") {
             break
         }
         Start-Sleep -Milliseconds 120
     }
-    return [pscustomobject]@{ Ms = $mejor; Estados = ($estados | Select-Object -Unique) -join "," }
+    return [pscustomobject]@{ Ms = $best; States = ($states | Select-Object -Unique) -join "," }
 }
 
-function Measure-PingMin([string]$Ip, [int]$Veces = 5) {
+function Measure-PingMin([string]$Ip, [int]$Times = 5) {
     $ping = New-Object System.Net.NetworkInformation.Ping
-    $mejor = $null
+    $best = $null
     $ttl = $null
-    for ($i = 0; $i -lt $Veces; $i++) {
+    for ($i = 0; $i -lt $Times; $i++) {
         try {
             $r = $ping.Send($Ip, 1500)
             if ($r.Status -eq "Success") {
-                if ($mejor -eq $null -or $r.RoundtripTime -lt $mejor) { $mejor = [double]$r.RoundtripTime }
+                if ($best -eq $null -or $r.RoundtripTime -lt $best) { $best = [double]$r.RoundtripTime }
                 if ($r.Options -ne $null) { $ttl = $r.Options.Ttl }
             }
         } catch {}
         Start-Sleep -Milliseconds 100
     }
-    return [pscustomobject]@{ Ms = $mejor; Ttl = $ttl }
+    return [pscustomobject]@{ Ms = $best; Ttl = $ttl }
 }
 
-function Resolve-Ipv4([string]$Nombre) {
+function Resolve-Ipv4([string]$Name) {
     $ip = $null
-    if ([System.Net.IPAddress]::TryParse($Nombre, [ref]$ip)) { return $ip.ToString() }
+    if ([System.Net.IPAddress]::TryParse($Name, [ref]$ip)) { return $ip.ToString() }
     try {
-        $todas = [System.Net.Dns]::GetHostAddresses($Nombre) | Where-Object { $_.AddressFamily -eq "InterNetwork" }
-        if ($todas) { return $todas[0].ToString() }
+        $all = [System.Net.Dns]::GetHostAddresses($Name) | Where-Object { $_.AddressFamily -eq "InterNetwork" }
+        if ($all) { return $all[0].ToString() }
     } catch {}
     return $null
 }
 
-function Test-Privada([string]$Ip) {
+function Test-Private([string]$Ip) {
     if ($Ip -match '^10\.' -or $Ip -match '^192\.168\.' -or $Ip -match '^127\.' -or $Ip -match '^169\.254\.') { return $true }
     if ($Ip -match '^172\.(\d+)\.') { $b = [int]$Matches[1]; return ($b -ge 16 -and $b -le 31) }
     if ($Ip -match '^100\.(\d+)\.') { $b = [int]$Matches[1]; return ($b -ge 64 -and $b -le 127) }
@@ -166,116 +171,116 @@ function Test-Privada([string]$Ip) {
 }
 
 # --------------------------------------------------------------------------
-# Inicio
+# Start
 # --------------------------------------------------------------------------
-Out-Linea ("AntiFaker " + $script:Version + " - " + (Get-Date -Format "yyyy-MM-dd HH:mm:ss")) "White"
-Out-Linea ("Equipo: " + $env:COMPUTERNAME + "   Usuario: " + $env:USERNAME) "White"
-if (-not $script:EsWindows) {
-    Out-Linea "Aviso: no es Windows; solo se hacen las pruebas de red portables." "Yellow"
+Out-Line ("AntiFaker " + $script:Version + " - " + (Get-Date -Format "yyyy-MM-dd HH:mm:ss")) "White"
+Out-Line ("Computer: " + $env:COMPUTERNAME + "   User: " + $env:USERNAME) "White"
+if (-not $script:IsWin) {
+    Out-Line "Warning: not Windows; only the portable network tests will run." "Yellow"
 }
 
 # --------------------------------------------------------------------------
-# 0. Conexiones de Minecraft
+# 0. Minecraft connections
 # --------------------------------------------------------------------------
-Out-Titulo "Conexiones de Minecraft"
-$destinos = New-Object System.Collections.Generic.List[object]
+Out-Title "Minecraft connections"
+$targets = New-Object System.Collections.Generic.List[object]
 
-if ($Servidor -ne "") {
-    $hostSrv = $Servidor
-    $puertoSrv = 25565
-    if ($Servidor -match '^(.+):(\d+)$') { $hostSrv = $Matches[1]; $puertoSrv = [int]$Matches[2] }
+if ($Server -ne "") {
+    $srvHost = $Server
+    $srvPort = 25565
+    if ($Server -match '^(.+):(\d+)$') { $srvHost = $Matches[1]; $srvPort = [int]$Matches[2] }
     elseif (Test-Cmd "Resolve-DnsName") {
         try {
-            $srv = Resolve-DnsName -Name ("_minecraft._tcp." + $hostSrv) -Type SRV -ErrorAction Stop |
+            $srv = Resolve-DnsName -Name ("_minecraft._tcp." + $srvHost) -Type SRV -ErrorAction Stop |
                 Where-Object { $_.Type -eq "SRV" } | Select-Object -First 1
-            if ($srv) { Out-Info ("SRV: " + $srv.NameTarget + ":" + $srv.Port); $hostSrv = $srv.NameTarget; $puertoSrv = [int]$srv.Port }
+            if ($srv) { Out-Info ("SRV: " + $srv.NameTarget + ":" + $srv.Port); $srvHost = $srv.NameTarget; $srvPort = [int]$srv.Port }
         } catch {}
     }
-    $ipSrv = Resolve-Ipv4 $hostSrv
-    if ($ipSrv) {
-        $destinos.Add([pscustomobject]@{ Ip = $ipSrv; Puerto = $puertoSrv; Origen = ("-Servidor " + $Servidor) })
-        Out-Info ("Server indicado: " + $hostSrv + " -> " + $ipSrv + ":" + $puertoSrv)
+    $srvIp = Resolve-Ipv4 $srvHost
+    if ($srvIp) {
+        $targets.Add([pscustomobject]@{ Ip = $srvIp; Port = $srvPort; Source = ("-Server " + $Server) })
+        Out-Info ("Given server: " + $srvHost + " -> " + $srvIp + ":" + $srvPort)
     } else {
-        Out-Linea ("  No se pudo resolver " + $hostSrv) "Yellow"
+        Out-Line ("  Could not resolve " + $srvHost) "Yellow"
     }
 }
 
 if (Test-Cmd "Get-NetTCPConnection") {
     $procs = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -match '^(javaw?|minecraft.*|lunar.*|badlion.*|feather.*)$' })
     if ($procs.Count -eq 0) {
-        Out-Linea "  No hay ningun Java/Minecraft abierto. El jugador debe estar DENTRO del server." "Yellow"
+        Out-Line "  No Java/Minecraft process is running. The player must be INSIDE the server." "Yellow"
     }
     $ids = @($procs | ForEach-Object { $_.Id })
-    $conexiones = @(Get-NetTCPConnection -State Established -ErrorAction SilentlyContinue | Where-Object { $ids -contains $_.OwningProcess })
-    foreach ($c in $conexiones) {
+    $conns = @(Get-NetTCPConnection -State Established -ErrorAction SilentlyContinue | Where-Object { $ids -contains $_.OwningProcess })
+    foreach ($c in $conns) {
         $p = $procs | Where-Object { $_.Id -eq $c.OwningProcess } | Select-Object -First 1
         $ip = [string]$c.RemoteAddress
         if ($ip -match '^::ffff:') { $ip = $ip.Substring(7) }
         if ($ip -notmatch '^\d+\.\d+\.\d+\.\d+$') { continue }
-        # Puertos web de Mojang/Microsoft/launchers: no son el server
+        # Web ports of Mojang/Microsoft/launchers: not the server
         if ($c.RemotePort -eq 443 -or $c.RemotePort -eq 80) { continue }
         Out-Info ($p.ProcessName + " (PID " + $c.OwningProcess + ") -> " + $ip + ":" + $c.RemotePort)
         if ($ip -match '^127\.') {
-            # El juego conectado a un proxy en este mismo PC
-            $escucha = Get-NetTCPConnection -State Listen -LocalPort $c.RemotePort -ErrorAction SilentlyContinue | Select-Object -First 1
-            $quien = ""
-            if ($escucha) {
-                $pp = Get-CimInstance Win32_Process -Filter ("ProcessId=" + $escucha.OwningProcess) -ErrorAction SilentlyContinue
-                if ($pp) { $quien = $pp.Name + " " + $pp.CommandLine }
+            # The game is connected to a proxy on this same PC
+            $listener = Get-NetTCPConnection -State Listen -LocalPort $c.RemotePort -ErrorAction SilentlyContinue | Select-Object -First 1
+            $who = ""
+            if ($listener) {
+                $pp = Get-CimInstance Win32_Process -Filter ("ProcessId=" + $listener.OwningProcess) -ErrorAction SilentlyContinue
+                if ($pp) { $who = $pp.Name + " " + $pp.CommandLine }
             }
-            if ($quien -match '(?i)faker') {
-                Add-Hallazgo 3 ("Minecraft conectado a un proxy local que es Faker: " + $quien)
+            if ($who -match '(?i)faker') {
+                Add-Finding 3 ("Minecraft is connected to a local proxy that is Faker: " + $who)
             } else {
-                Add-Hallazgo 1 ("Minecraft conectado a un proxy en este PC (127.0.0.1:" + $c.RemotePort + "): " + $quien)
+                Add-Finding 1 ("Minecraft is connected to a proxy on this PC (127.0.0.1:" + $c.RemotePort + "): " + $who)
             }
             continue
         }
-        if (-not ($destinos | Where-Object { $_.Ip -eq $ip -and $_.Puerto -eq $c.RemotePort })) {
-            $destinos.Add([pscustomobject]@{ Ip = $ip; Puerto = [int]$c.RemotePort; Origen = $p.ProcessName })
+        if (-not ($targets | Where-Object { $_.Ip -eq $ip -and $_.Port -eq $c.RemotePort })) {
+            $targets.Add([pscustomobject]@{ Ip = $ip; Port = [int]$c.RemotePort; Source = $p.ProcessName })
         }
     }
-    if ($procs.Count -gt 0 -and $destinos.Count -eq 0) {
-        Out-Linea "  Minecraft no tiene conexion a ningun server. Que entre al server y repite." "Yellow"
+    if ($procs.Count -gt 0 -and $targets.Count -eq 0) {
+        Out-Line "  Minecraft is not connected to any server. Have the player join the server and run again." "Yellow"
     }
-} elseif ($destinos.Count -eq 0) {
-    Out-Info "No se pueden listar conexiones en este sistema; usa -Servidor."
+} elseif ($targets.Count -eq 0) {
+    Out-Info "Connections cannot be listed on this system; use -Server."
 }
 
 # --------------------------------------------------------------------------
-# 1. Cebo: IPs que no existen en Internet al puerto del server
+# 1. Bait: non-existent IPs on the server port
 # --------------------------------------------------------------------------
-Out-Titulo "1. Cebo (IPs inexistentes al puerto del server)"
-$cebos = @("192.0.2.1", "198.51.100.1", "203.0.113.1")
-$puertosCebo = New-Object System.Collections.Generic.List[int]
-$puertosCebo.Add(25565)
-foreach ($d in $destinos) { if (-not $puertosCebo.Contains($d.Puerto)) { $puertosCebo.Add($d.Puerto) } }
-foreach ($x in $Puertos) { if (-not $puertosCebo.Contains($x)) { $puertosCebo.Add($x) } }
-$puertoControl = 47321
-while ($puertosCebo.Contains($puertoControl)) { $puertoControl++ }
+Out-Title "1. Bait (non-existent IPs on the server port)"
+$baits = @("192.0.2.1", "198.51.100.1", "203.0.113.1")
+$baitPorts = New-Object System.Collections.Generic.List[int]
+$baitPorts.Add(25565)
+foreach ($t in $targets) { if (-not $baitPorts.Contains($t.Port)) { $baitPorts.Add($t.Port) } }
+foreach ($x in $Ports) { if (-not $baitPorts.Contains($x)) { $baitPorts.Add($x) } }
+$controlPort = 47321
+while ($baitPorts.Contains($controlPort)) { $controlPort++ }
 
-$control = @($cebos | ForEach-Object { Measure-Tcp $_ $puertoControl 1500 })
-$controlConecta = @($control | Where-Object { $_.Estado -eq "Conecta" }).Count
-if ($controlConecta -gt 0) {
-    Out-Linea ("  La red intercepta CUALQUIER puerto (control " + $puertoControl + " tambien conecta). Prueba del cebo no valida.") "Yellow"
-    Out-Linea "  (Antivirus/cortafuegos/VPN con proxy transparente.) Mira las demas pruebas." "Yellow"
+$control = @($baits | ForEach-Object { Measure-Tcp $_ $controlPort 1500 })
+$controlConnected = @($control | Where-Object { $_.State -eq "Connected" }).Count
+if ($controlConnected -gt 0) {
+    Out-Line ("  The network intercepts ANY port (control port " + $controlPort + " also connects). Bait test not valid.") "Yellow"
+    Out-Line "  (Antivirus/firewall/VPN with a transparent proxy.) Check the other tests." "Yellow"
 } else {
-    Out-Info ("Control puerto " + $puertoControl + ": " + (($control | ForEach-Object { $_.Estado }) -join ", ") + " (normal)")
-    foreach ($pto in $puertosCebo) {
-        $res = @($cebos | ForEach-Object { $r = Measure-Tcp $_ $pto 1500; [pscustomobject]@{ Ip = $_; Estado = $r.Estado; Ms = $r.Ms } })
-        $conectan = @($res | Where-Object { $_.Estado -eq "Conecta" })
-        $resumen = ($res | ForEach-Object { $_.Ip + "=" + $_.Estado + $(if ($_.Estado -eq "Conecta") { " " + $_.Ms + "ms" } else { "" }) }) -join "  "
-        if ($conectan.Count -gt 0) {
-            Add-Hallazgo 3 ("Puerto " + $pto + ": se puede conectar a IPs que no existen (" + $resumen + "). Algo en la red desvia el puerto del server a un proxy: Faker.")
+    Out-Info ("Control port " + $controlPort + ": " + (($control | ForEach-Object { $_.State }) -join ", ") + " (normal)")
+    foreach ($port in $baitPorts) {
+        $res = @($baits | ForEach-Object { $r = Measure-Tcp $_ $port 1500; [pscustomobject]@{ Ip = $_; State = $r.State; Ms = $r.Ms } })
+        $connected = @($res | Where-Object { $_.State -eq "Connected" })
+        $summary = ($res | ForEach-Object { $_.Ip + "=" + $_.State + $(if ($_.State -eq "Connected") { " " + $_.Ms + "ms" } else { "" }) }) -join "  "
+        if ($connected.Count -gt 0) {
+            Add-Finding 3 ("Port " + $port + ": connections to non-existent IPs succeed (" + $summary + "). Something on the network diverts the server port to a proxy: Faker.")
         } else {
-            Out-Ok ("Puerto " + $pto + ": " + $resumen)
+            Out-Ok ("Port " + $port + ": " + $summary)
         }
     }
 }
 
 # --------------------------------------------------------------------------
-# 2. Latencia: conexion al server vs ping a la misma IP
+# 2. Latency: connection to the server vs ping to the same IP
 # --------------------------------------------------------------------------
-Out-Titulo "2. Latencia del server"
+Out-Title "2. Server latency"
 $gw = $null
 if (Test-Cmd "Get-NetIPConfiguration") {
     try {
@@ -283,72 +288,72 @@ if (Test-Cmd "Get-NetIPConfiguration") {
         if ($cfg) { $gw = [string](@($cfg.IPv4DefaultGateway)[0].NextHop) }
     } catch {}
 }
-$pingGw = $null
+$gwPing = $null
 if ($gw) {
-    $pingGw = Measure-PingMin $gw 4
-    Out-Info ("Puerta de enlace " + $gw + ": ping " + $(if ($pingGw.Ms -ne $null) { [string]$pingGw.Ms + " ms" } else { "sin respuesta" }))
+    $gwPing = Measure-PingMin $gw 4
+    Out-Info ("Gateway " + $gw + ": ping " + $(if ($gwPing.Ms -ne $null) { [string]$gwPing.Ms + " ms" } else { "no reply" }))
 }
-if ($destinos.Count -eq 0) {
-    Out-Info "Sin server que medir (el jugador no esta conectado y no se paso -Servidor)."
+if ($targets.Count -eq 0) {
+    Out-Info "No server to measure (the player is not connected and -Server was not given)."
 }
-foreach ($d in $destinos) {
-    if (Test-Privada $d.Ip) { Out-Info ($d.Ip + " es una IP privada (server en la red local): no se mide."); continue }
-    $mc = Measure-TcpMin $d.Ip $d.Puerto 5
-    $ref = Measure-PingMin $d.Ip 5
-    $refTipo = "ping"
+foreach ($t in $targets) {
+    if (Test-Private $t.Ip) { Out-Info ($t.Ip + " is a private IP (server on the local network): not measured."); continue }
+    $mc = Measure-TcpMin $t.Ip $t.Port 5
+    $ref = Measure-PingMin $t.Ip 5
+    $refKind = "ping"
     $refMs = $ref.Ms
     if ($refMs -eq $null) {
-        # Sin ICMP: un puerto cerrado contesta con RST desde el propio server
+        # No ICMP: a closed port answers with an RST from the server itself
         foreach ($alt in @(80, 443, 22, 8080, 21, 25564)) {
-            if ($alt -eq $d.Puerto) { continue }
-            $a = Measure-TcpMin $d.Ip $alt 3
-            if ($a.Ms -ne $null) { $refMs = $a.Ms; $refTipo = "tcp:" + $alt; break }
+            if ($alt -eq $t.Port) { continue }
+            $a = Measure-TcpMin $t.Ip $alt 3
+            if ($a.Ms -ne $null) { $refMs = $a.Ms; $refKind = "tcp:" + $alt; break }
         }
     }
-    $txt = $d.Ip + ":" + $d.Puerto + "  conexion " + $(if ($mc.Ms -ne $null) { [string]$mc.Ms + " ms" } else { $mc.Estados }) +
-        "  |  referencia (" + $refTipo + ") " + $(if ($refMs -ne $null) { [string]$refMs + " ms" } else { "sin respuesta" })
+    $txt = $t.Ip + ":" + $t.Port + "  connect " + $(if ($mc.Ms -ne $null) { [string]$mc.Ms + " ms" } else { $mc.States }) +
+        "  |  reference (" + $refKind + ") " + $(if ($refMs -ne $null) { [string]$refMs + " ms" } else { "no reply" })
     if ($mc.Ms -eq $null -or $refMs -eq $null) {
-        Out-Info ($txt + "  -> no concluyente")
+        Out-Info ($txt + "  -> inconclusive")
         continue
     }
     if (($refMs - $mc.Ms) -ge 12 -and $mc.Ms -lt ($refMs * 0.45)) {
         $extra = ""
-        if ($pingGw -ne $null -and $pingGw.Ms -ne $null -and $mc.Ms -le ($pingGw.Ms + 6)) { $extra = " (igual que la puerta de enlace)" }
-        Add-Hallazgo 2 ($txt + " -> la conexion al server la contesta algo en la red local" + $extra + ". Proxy en medio.")
+        if ($gwPing -ne $null -and $gwPing.Ms -ne $null -and $mc.Ms -le ($gwPing.Ms + 6)) { $extra = " (same as the gateway)" }
+        Add-Finding 2 ($txt + " -> the server connection is answered by something on the local network" + $extra + ". Proxy in between.")
     } else {
         Out-Ok $txt
     }
 }
 
 # --------------------------------------------------------------------------
-# 3. Red del PC: punto de acceso de otro PC
+# 3. Network: another PC's hotspot
 # --------------------------------------------------------------------------
-Out-Titulo "3. Red"
-$patronHotspot = '^(DESKTOP|LAPTOP|PC|WIN)-[A-Z0-9]{5,15} \d{4}$'
-if ($script:EsWindows) {
+Out-Title "3. Network"
+$hotspotPattern = '^(DESKTOP|LAPTOP|PC|WIN)-[A-Z0-9]{5,15} \d{4}$'
+if ($script:IsWin) {
     $wifiSsid = $null; $wifiBssid = $null
     try {
         if ($gw) {
-            Out-Info ("Puerta de enlace: " + $gw)
+            Out-Info ("Gateway: " + $gw)
             if ($gw -match '^192\.168\.137\.') {
-                Add-Hallazgo 2 ("La puerta de enlace es " + $gw + ": red de 'Conexion compartida a Internet' de Windows (otro PC comparte su Internet).")
+                Add-Finding 2 ("The gateway is " + $gw + ": Windows 'Internet Connection Sharing' network (another PC is sharing its Internet).")
             }
         }
         if (Test-Cmd "Get-DnsClient") {
             $suf = @(Get-DnsClient -ErrorAction SilentlyContinue | Where-Object { $_.ConnectionSpecificSuffix -match 'mshome\.net' })
-            if ($suf.Count -gt 0) { Add-Hallazgo 2 "Sufijo DNS mshome.net: la red la da la Conexion compartida de Windows." }
+            if ($suf.Count -gt 0) { Add-Finding 2 "DNS suffix mshome.net: the network is provided by Windows Internet Connection Sharing." }
         }
-        # MAC de la puerta de enlace
-        $macGw = $null
+        # Gateway MAC
+        $gwMac = $null
         if ($gw -and (Test-Cmd "Get-NetNeighbor")) {
             $n = Get-NetNeighbor -IPAddress $gw -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($n) { $macGw = ([string]$n.LinkLayerAddress).ToUpper().Replace("-", ":") }
+            if ($n) { $gwMac = ([string]$n.LinkLayerAddress).ToUpper().Replace("-", ":") }
         }
-        if ($macGw -and $macGw -match '^[0-9A-F]{2}') {
-            $b0 = [Convert]::ToInt32($macGw.Substring(0, 2), 16)
-            Out-Info ("MAC de la puerta de enlace: " + $macGw)
+        if ($gwMac -and $gwMac -match '^[0-9A-F]{2}') {
+            $b0 = [Convert]::ToInt32($gwMac.Substring(0, 2), 16)
+            Out-Info ("Gateway MAC: " + $gwMac)
             if (($b0 -band 2) -ne 0) {
-                Add-Hallazgo 1 "La MAC de la puerta de enlace es 'administrada localmente' (adaptador virtual, tipico del punto de acceso de Windows o de una red de invitados)."
+                Add-Finding 1 "The gateway MAC is 'locally administered' (virtual adapter, typical of a Windows hotspot or a guest network)."
             }
         }
         # Wi-Fi
@@ -362,136 +367,136 @@ if ($script:EsWindows) {
         }
         if ($wifiSsid) {
             Out-Info ("Wi-Fi: SSID '" + $wifiSsid + "'  BSSID " + $wifiBssid)
-            if ($wifiSsid -match $patronHotspot) {
-                Add-Hallazgo 2 ("El Wi-Fi '" + $wifiSsid + "' tiene el nombre por defecto del punto de acceso movil de Windows: el PC sale a Internet por otro PC.")
+            if ($wifiSsid -match $hotspotPattern) {
+                Add-Finding 2 ("Wi-Fi '" + $wifiSsid + "' has the default name of a Windows mobile hotspot: this PC reaches the Internet through another PC.")
             }
-            if ($wifiBssid -and $macGw -and $wifiBssid -eq $macGw) {
-                Add-Hallazgo 1 "El punto de acceso Wi-Fi y la puerta de enlace son el mismo aparato (tipico de un PC haciendo de punto de acceso)."
+            if ($wifiBssid -and $gwMac -and $wifiBssid -eq $gwMac) {
+                Add-Finding 1 "The Wi-Fi access point and the gateway are the same device (typical of a PC acting as a hotspot)."
             }
         } else {
-            Out-Info "Sin Wi-Fi conectado (o Windows no deja leerlo sin permiso de ubicacion)."
+            Out-Info "No Wi-Fi connected (or Windows will not show it without location permission)."
         }
-        # Doble NAT: el segundo salto es otra red privada
+        # Double NAT: the second hop is another private network
         if (Test-Cmd "tracert") {
             $tr = tracert -d -h 3 -w 400 1.1.1.1 2>$null
-            $saltos = @()
-            foreach ($l in $tr) { if ($l -match '^\s*(\d+)\s+.*?(\d+\.\d+\.\d+\.\d+)\s*$') { $saltos += [pscustomobject]@{ N = [int]$Matches[1]; Ip = $Matches[2] } } }
-            if ($saltos.Count -gt 0) { Out-Info ("Traceroute: " + (($saltos | ForEach-Object { [string]$_.N + "=" + $_.Ip }) -join "  ")) }
-            $s2 = $saltos | Where-Object { $_.N -eq 2 } | Select-Object -First 1
-            if ($s2 -and (Test-Privada $s2.Ip) -and -not ($s2.Ip -match '^100\.')) {
-                Add-Hallazgo 1 ("Doble NAT: el segundo salto (" + $s2.Ip + ") es otra red privada. Hay un PC o router extra entre este PC y el router.")
+            $hops = @()
+            foreach ($l in $tr) { if ($l -match '^\s*(\d+)\s+.*?(\d+\.\d+\.\d+\.\d+)\s*$') { $hops += [pscustomobject]@{ N = [int]$Matches[1]; Ip = $Matches[2] } } }
+            if ($hops.Count -gt 0) { Out-Info ("Traceroute: " + (($hops | ForEach-Object { [string]$_.N + "=" + $_.Ip }) -join "  ")) }
+            $h2 = $hops | Where-Object { $_.N -eq 2 } | Select-Object -First 1
+            if ($h2 -and (Test-Private $h2.Ip) -and -not ($h2.Ip -match '^100\.')) {
+                Add-Finding 1 ("Double NAT: the second hop (" + $h2.Ip + ") is another private network. There is an extra PC or router between this PC and the router.")
             }
         }
-        # Historial de redes con nombre de punto de acceso de Windows (ultimos 7 dias)
-        $raiz = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\NetworkList\Profiles"
-        if (Test-Path $raiz) {
-            foreach ($k in Get-ChildItem $raiz -ErrorAction SilentlyContinue) {
+        # History of networks with Windows hotspot names (last 7 days)
+        $root = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\NetworkList\Profiles"
+        if (Test-Path $root) {
+            foreach ($k in Get-ChildItem $root -ErrorAction SilentlyContinue) {
                 $pr = Get-ItemProperty $k.PSPath -ErrorAction SilentlyContinue
                 if (-not $pr -or -not $pr.ProfileName) { continue }
-                $fecha = $null
+                $date = $null
                 if ($pr.DateLastConnected -is [byte[]] -and $pr.DateLastConnected.Length -ge 16) {
                     $b = $pr.DateLastConnected
                     try {
-                        $fecha = Get-Date -Year ([BitConverter]::ToUInt16($b, 0)) -Month ([BitConverter]::ToUInt16($b, 2)) -Day ([BitConverter]::ToUInt16($b, 6)) `
+                        $date = Get-Date -Year ([BitConverter]::ToUInt16($b, 0)) -Month ([BitConverter]::ToUInt16($b, 2)) -Day ([BitConverter]::ToUInt16($b, 6)) `
                             -Hour ([BitConverter]::ToUInt16($b, 8)) -Minute ([BitConverter]::ToUInt16($b, 10)) -Second 0
                     } catch {}
                 }
-                $reciente = ($fecha -eq $null -or $fecha -gt (Get-Date).AddDays(-7))
-                if ($pr.ProfileName -match $patronHotspot -and $reciente) {
-                    Add-Hallazgo 1 ("Se conecto hace poco a una red con nombre de punto de acceso de Windows: '" + $pr.ProfileName + "' (" + $(if ($fecha) { $fecha.ToString("yyyy-MM-dd HH:mm") } else { "fecha ?" }) + ").")
+                $recent = ($date -eq $null -or $date -gt (Get-Date).AddDays(-7))
+                if ($pr.ProfileName -match $hotspotPattern -and $recent) {
+                    Add-Finding 1 ("Recently connected to a network with a Windows hotspot name: '" + $pr.ProfileName + "' (" + $(if ($date) { $date.ToString("yyyy-MM-dd HH:mm") } else { "date ?" }) + ").")
                 }
             }
         }
     } catch {
-        Out-Linea ("  Error en la prueba de red: " + $_.Exception.Message) "Yellow"
+        Out-Line ("  Error in the network test: " + $_.Exception.Message) "Yellow"
     }
 } else {
-    Out-Info "Solo en Windows."
+    Out-Info "Windows only."
 }
 
 # --------------------------------------------------------------------------
-# 4. Rastros de Faker en este PC
+# 4. Faker traces on this PC
 # --------------------------------------------------------------------------
-Out-Titulo "4. Rastros de Faker en este PC"
-if ($script:EsWindows) {
+Out-Title "4. Faker traces on this PC"
+if ($script:IsWin) {
     try {
-        $carpetas = @()
-        if ($env:APPDATA) { $carpetas += (Join-Path $env:APPDATA ".faker") }
-        if ($env:USERPROFILE) { $carpetas += (Join-Path $env:USERPROFILE ".faker") }
-        foreach ($c in $carpetas) {
+        $folders = @()
+        if ($env:APPDATA) { $folders += (Join-Path $env:APPDATA ".faker") }
+        if ($env:USERPROFILE) { $folders += (Join-Path $env:USERPROFILE ".faker") }
+        foreach ($c in $folders) {
             if (Test-Path $c) {
                 $f = @(Get-ChildItem $c -Force -ErrorAction SilentlyContinue | ForEach-Object { $_.Name + " (" + $_.LastWriteTime.ToString("yyyy-MM-dd HH:mm") + ")" })
-                Add-Hallazgo 3 ("Carpeta de Faker: " + $c + "  ->  " + ($f -join ", "))
+                Add-Finding 3 ("Faker folder: " + $c + "  ->  " + ($f -join ", "))
             }
         }
-        # Proceso Faker abierto
+        # Faker running
         $jp = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -match '(?i)(net\.java\.faker|faker[-_ ]?[\d.]*\.(jar|exe))' -or $_.Name -match '(?i)^faker' })
-        foreach ($p in $jp) { Add-Hallazgo 3 ("Faker abierto: PID " + $p.ProcessId + " " + $p.CommandLine) }
-        # Driver WinDivert (Faker lo carga para desviar el trafico)
+        foreach ($p in $jp) { Add-Finding 3 ("Faker running: PID " + $p.ProcessId + " " + $p.CommandLine) }
+        # WinDivert driver (Faker loads it to divert traffic)
         $drv = @()
         try { $drv = @(Get-CimInstance Win32_SystemDriver -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '(?i)windivert' -or $_.PathName -match '(?i)windivert' }) } catch {}
         foreach ($d in $drv) {
-            $txt = "Driver WinDivert (" + $d.Name + ", " + $d.State + "): " + $d.PathName
-            if ($d.State -eq "Running") { Add-Hallazgo 2 ($txt + ". Lo usan Faker y otros programas que desvian trafico.") }
-            else { Add-Hallazgo 1 ($txt + ". Instalado/usado en algun momento.") }
+            $txt = "WinDivert driver (" + $d.Name + ", " + $d.State + "): " + $d.PathName
+            if ($d.State -eq "Running") { Add-Finding 2 ($txt + ". Used by Faker and other traffic-diverting programs.") }
+            else { Add-Finding 1 ($txt + ". Installed/used at some point.") }
         }
-        # Descargas y temporales
-        $sitios = @()
-        if ($env:USERPROFILE) { $sitios += @((Join-Path $env:USERPROFILE "Downloads"), (Join-Path $env:USERPROFILE "Desktop"), (Join-Path $env:USERPROFILE "Documents")) }
-        if ($env:TEMP) { $sitios += $env:TEMP }
-        foreach ($s in $sitios) {
+        # Downloads and temp
+        $places = @()
+        if ($env:USERPROFILE) { $places += @((Join-Path $env:USERPROFILE "Downloads"), (Join-Path $env:USERPROFILE "Desktop"), (Join-Path $env:USERPROFILE "Documents")) }
+        if ($env:TEMP) { $places += $env:TEMP }
+        foreach ($s in $places) {
             if (-not (Test-Path $s)) { continue }
             $hits = @(Get-ChildItem $s -Recurse -Depth 2 -Force -ErrorAction SilentlyContinue |
                 Where-Object { $_.Name -match '(?i)^(faker[-_ ]?[\d.]*\.(jar|exe|zip)|WinDivert64\.sys|win_redirect\.dll)$' })
-            foreach ($h in $hits) { Add-Hallazgo 2 ("Archivo: " + $h.FullName + " (" + $h.LastWriteTime.ToString("yyyy-MM-dd HH:mm") + ")") }
+            foreach ($h in $hits) { Add-Finding 2 ("File: " + $h.FullName + " (" + $h.LastWriteTime.ToString("yyyy-MM-dd HH:mm") + ")") }
         }
-        # Prefetch (solo con administrador)
+        # Prefetch (administrator only)
         $pf = Join-Path $env:WINDIR "Prefetch"
         try {
             $pfh = @(Get-ChildItem $pf -Filter "FAKER*.pf" -ErrorAction Stop)
-            foreach ($h in $pfh) { Add-Hallazgo 2 ("Prefetch: " + $h.Name + " (ultima ejecucion " + $h.LastWriteTime.ToString("yyyy-MM-dd HH:mm") + ")") }
-        } catch { Out-Info "Prefetch no legible (ejecuta como administrador para mirarlo)." }
-        # Este PC compartiendo Internet (seria el PC del cheat)
+            foreach ($h in $pfh) { Add-Finding 2 ("Prefetch: " + $h.Name + " (last run " + $h.LastWriteTime.ToString("yyyy-MM-dd HH:mm") + ")") }
+        } catch { Out-Info "Prefetch not readable (run as administrator to check it)." }
+        # This PC sharing its Internet (it would be the cheating PC)
         if (Test-Cmd "Get-NetIPAddress") {
             $ics = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -like "192.168.137.*" })
-            foreach ($i in $ics) { Add-Hallazgo 1 ("Este PC tiene " + $i.IPAddress + " en '" + $i.InterfaceAlias + "': esta compartiendo su Internet (punto de acceso).") }
+            foreach ($i in $ics) { Add-Finding 1 ("This PC has " + $i.IPAddress + " on '" + $i.InterfaceAlias + "': it is sharing its Internet (hotspot).") }
         }
     } catch {
-        Out-Linea ("  Error buscando rastros: " + $_.Exception.Message) "Yellow"
+        Out-Line ("  Error looking for traces: " + $_.Exception.Message) "Yellow"
     }
-    if (-not ($script:Hallazgos | Where-Object { $_.Texto -match '^(Carpeta|Faker abierto|Driver|Archivo|Prefetch|Este PC)' })) {
-        Out-Ok "Nada de Faker en este PC (normal: Faker corre en el OTRO PC)."
+    if (-not ($script:Findings | Where-Object { $_.Text -match '^(Faker folder|Faker running|WinDivert|File:|Prefetch|This PC)' })) {
+        Out-Ok "No Faker on this PC (expected: Faker runs on the OTHER PC)."
     }
 } else {
-    Out-Info "Solo en Windows."
+    Out-Info "Windows only."
 }
 
 # --------------------------------------------------------------------------
-# Veredicto
+# Verdict
 # --------------------------------------------------------------------------
-Out-Titulo "Veredicto"
+Out-Title "Verdict"
 $max = 0
-foreach ($h in $script:Hallazgos) { if ($h.Nivel -gt $max) { $max = $h.Nivel } }
-$fuertes = @($script:Hallazgos | Where-Object { $_.Nivel -ge 2 }).Count
-$indicios = @($script:Hallazgos | Where-Object { $_.Nivel -eq 1 }).Count
+foreach ($h in $script:Findings) { if ($h.Level -gt $max) { $max = $h.Level } }
+$strong = @($script:Findings | Where-Object { $_.Level -ge 2 }).Count
+$hints = @($script:Findings | Where-Object { $_.Level -eq 1 }).Count
 if ($max -ge 3) {
-    Out-Linea "  FAKER DETECTADO: hay un proxy desviando la conexion de Minecraft." "Red"
-} elseif ($fuertes -ge 2 -or ($fuertes -ge 1 -and $indicios -ge 1)) {
-    Out-Linea "  MUY SOSPECHOSO: el PC sale a Internet por otro PC y/o la conexion la contesta un proxy." "Magenta"
-} elseif ($fuertes -ge 1 -or $indicios -ge 2) {
-    Out-Linea "  SOSPECHOSO: revisa los hallazgos y pregunta por la red del jugador." "Yellow"
+    Out-Line "  FAKER DETECTED: a proxy is diverting the Minecraft connection." "Red"
+} elseif ($strong -ge 2 -or ($strong -ge 1 -and $hints -ge 1)) {
+    Out-Line "  VERY SUSPICIOUS: this PC reaches the Internet through another PC and/or the connection is answered by a proxy." "Magenta"
+} elseif ($strong -ge 1 -or $hints -ge 2) {
+    Out-Line "  SUSPICIOUS: review the findings and ask the player about their network." "Yellow"
 } else {
-    Out-Linea "  Sin rastro de Faker." "Green"
+    Out-Line "  No sign of Faker." "Green"
 }
-if ($destinos.Count -eq 0) {
-    Out-Linea "  OJO: no se midio ningun server. Repite con el jugador dentro del server." "Yellow"
+if ($targets.Count -eq 0) {
+    Out-Line "  NOTE: no server was measured. Run again with the player inside the server." "Yellow"
 }
 
-if (-not $SinInforme -and $script:EsWindows) {
+if (-not $NoReport -and $script:IsWin) {
     try {
-        $esc = [Environment]::GetFolderPath("Desktop")
-        $ruta = Join-Path $esc ("AntiFaker_" + (Get-Date -Format "yyyyMMdd_HHmmss") + ".txt")
-        $script:Lineas | Set-Content -Path $ruta -Encoding UTF8
-        Out-Linea ("Informe guardado en " + $ruta) "White"
+        $desk = [Environment]::GetFolderPath("Desktop")
+        $path = Join-Path $desk ("AntiFaker_" + (Get-Date -Format "yyyyMMdd_HHmmss") + ".txt")
+        $script:Lines | Set-Content -Path $path -Encoding UTF8
+        Out-Line ("Report saved to " + $path) "White"
     } catch {}
 }

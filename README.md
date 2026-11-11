@@ -1,58 +1,58 @@
 # AntiFaker
 
-Detector de **Faker** ([o1seth/faker](https://github.com/o1seth/faker)) para screenshares de Minecraft.
+Detects **Faker** ([o1seth/faker](https://github.com/o1seth/faker)) during Minecraft screenshares.
 
-## Uso rápido
+## Quick start
 
-Con el jugador **dentro del server**, en el PC que enseña, abrir PowerShell (Win+X → Terminal) y pegar:
+With the player **inside the server**, on the PC they are showing, open PowerShell (Win+X → Terminal) and paste:
 
 ```powershell
 irm https://raw.githubusercontent.com/Elomcraft/antifaker/main/AntiFaker.ps1 | iex
 ```
 
-Si da error de TLS (Windows 10 antiguo), usar este, que también sirve desde Win+R o desde CMD:
+If you get a TLS error (older Windows 10), use this one instead. It also works from Win+R or CMD:
 
 ```
 powershell -ep bypass -c "[Net.ServicePointManager]::SecurityProtocol='Tls12'; irm https://raw.githubusercontent.com/Elomcraft/antifaker/main/AntiFaker.ps1 | iex"
 ```
 
-Indicando el server a mano (si no lo detecta solo):
+To give the server by hand (if it is not detected automatically):
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Elomcraft/antifaker/main/AntiFaker.ps1))) -Servidor play.tuserver.com
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Elomcraft/antifaker/main/AntiFaker.ps1))) -Server play.yourserver.com
 ```
 
-No hace falta administrador (con administrador además mira el Prefetch). Tarda entre 20 y 60 segundos. Al final da un veredicto y guarda un informe `AntiFaker_*.txt` en el escritorio.
+No administrator rights needed (as administrator it also checks Prefetch). It takes 20 to 60 seconds, prints a verdict and saves an `AntiFaker_*.txt` report to the desktop.
 
-**Sin internet o sin comandos:** descargar [AntiFaker.bat](https://github.com/Elomcraft/antifaker/raw/main/AntiFaker.bat) y [AntiFaker.ps1](https://github.com/Elomcraft/antifaker/raw/main/AntiFaker.ps1) en la misma carpeta y abrir el `.bat` con doble clic.
+**Offline / no commands:** download [AntiFaker.bat](https://github.com/Elomcraft/antifaker/raw/main/AntiFaker.bat) and [AntiFaker.ps1](https://github.com/Elomcraft/antifaker/raw/main/AntiFaker.ps1) into the same folder and double-click the `.bat`.
 
-## Qué es Faker
+## What Faker is
 
-Faker es un proxy "man in the middle". El jugador juega con cheats en un PC y le enseña otro PC limpio al staff. El PC limpio sale a Internet por el punto de acceso Wi-Fi del PC del cheat, y Faker desvía la conexión de Minecraft para que los dos clientes compartan la misma sesión. En el PC limpio no hay nada de Faker que encontrar, así que AntiFaker busca **lo que Faker le hace a la red** de ese PC.
+Faker is a man-in-the-middle proxy. The player cheats on one PC and shows the staff a second, clean PC. The clean PC reaches the Internet through the cheating PC's Wi-Fi hotspot, and Faker diverts the Minecraft connection so both clients share the same session. There is nothing of Faker to find on the clean PC, so AntiFaker looks for **what Faker does to that PC's network**.
 
-## Qué comprueba
+## What it checks
 
-| # | Prueba | Peso |
-|---|--------|------|
-| 1 | **Cebo:** conecta al puerto del server en IPs que no existen en Internet (192.0.2.1, 198.51.100.1, 203.0.113.1, reservadas por el RFC 5737). Sin nada en medio no conecta nunca. Faker desvía *cualquier* IP en ese puerto a su proxy, así que conecta en pocos milisegundos. Antes lo prueba en un puerto de control: si el control también conecta, la red lo intercepta todo y la prueba no cuenta. | **Definitiva** |
-| 2 | **Latencia:** la conexión TCP al server se compara con el ping (o un puerto cerrado) a la misma IP. Faker contesta la conexión desde el otro PC sin retraso: sale en 2-5 ms cuando el server real está a 30+ ms. | Fuerte |
-| 3 | **Red:** puerta de enlace `192.168.137.x` (Conexión compartida de Windows), sufijo `mshome.net`, SSID por defecto de punto de acceso (`DESKTOP-XXXXXXX 1234`), MAC de la puerta de enlace administrada localmente, BSSID igual a la puerta de enlace, doble NAT e historial de redes de punto de acceso de los últimos 7 días. | Indicios |
-| 4 | **Rastros en este PC** (por si enseñan el PC del cheat): `%APPDATA%\.faker`, proceso Faker, driver WinDivert, archivos `faker-*.jar/exe`, Prefetch y si el PC está compartiendo su Internet. | Definitiva / fuerte |
+| # | Test | Weight |
+|---|------|--------|
+| 1 | **Bait:** connects to the server port on IPs that do not exist on the Internet (192.0.2.1, 198.51.100.1, 203.0.113.1, reserved by RFC 5737). With nothing in between this never connects. Faker diverts *any* IP on that port to its proxy, so it connects within a few milliseconds. A control port is tried first: if the control connects too, the network intercepts everything and the test does not count. | **Definitive** |
+| 2 | **Latency:** the TCP connection to the server is compared with a ping (or a closed port) to the same IP. Faker answers the connection from the other PC with no delay: 2-5 ms when the real server is 30+ ms away. | Strong |
+| 3 | **Network:** gateway `192.168.137.x` (Windows Internet Connection Sharing), `mshome.net` suffix, default hotspot SSID (`DESKTOP-XXXXXXX 1234`), locally administered gateway MAC, BSSID equal to the gateway, double NAT, and hotspot networks used in the last 7 days. | Hints |
+| 4 | **Traces on this PC** (in case they show the cheating PC): `%APPDATA%\.faker`, Faker process, WinDivert driver, `faker-*.jar/exe` files, Prefetch, and whether the PC is sharing its Internet. | Definitive / strong |
 
-## Veredictos
+## Verdicts
 
-- **FAKER DETECTADO**: el cebo conectó o hay archivos o proceso de Faker.
-- **MUY SOSPECHOSO**: varias pruebas fuertes (latencia, red de PC compartido...).
-- **SOSPECHOSO**: indicios sueltos; preguntar al jugador por su red.
-- **Sin rastro de Faker**.
+- **FAKER DETECTED**: the bait connected, or Faker files/process were found.
+- **VERY SUSPICIOUS**: several strong findings (latency, shared-PC network...).
+- **SUSPICIOUS**: loose hints; ask the player about their network.
+- **No sign of Faker**.
 
-## Límites
+## Limits
 
-- Basado en Faker 1.8 (agosto de 2026). Es de código abierto: si una versión futura limita el desvío a la IP del server, la prueba 1 dejará de saltar y quedarán la 2 y la 3.
-- Programas como ExitLag, NoPing o Proxifier, configurados para desviar el puerto de Minecraft de todos los programas, podrían hacer saltar el cebo. Si el jugador usa uno, ciérralo y repite.
-- Las pruebas de red son indicios: hay routers y redes de invitados con MAC locales y mucha gente con doble NAT.
-- Windows 11 puede pedir permiso de ubicación para leer el Wi-Fi. Si no lo da, esa parte se salta.
+- Based on Faker 1.8 (August 2026). It is open source: if a future version limits the diversion to the server IP, test 1 will stop firing and tests 2 and 3 remain.
+- Tools like ExitLag, NoPing or Proxifier, if set to divert the Minecraft port for every program, could trigger the bait. If the player uses one, close it and run again.
+- The network tests are hints: some routers and guest networks use local MACs, and double NAT is common.
+- Windows 11 may require location permission to read Wi-Fi details. Without it, that part is skipped.
 
-## Seguridad
+## Safety
 
-El script solo **lee**: no instala nada, no cambia la configuración ni envía datos a ningún sitio (las únicas conexiones son las pruebas al server, a las IPs cebo, a 1.1.1.1 para el traceroute y a la puerta de enlace). Es un solo archivo de texto: se puede leer entero antes de ejecutarlo.
+The script only **reads**: it installs nothing, changes no settings and sends no data anywhere (its only connections are the tests to the server, the bait IPs, 1.1.1.1 for the traceroute and the gateway). It is a single text file you can read in full before running it.
