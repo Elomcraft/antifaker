@@ -23,11 +23,13 @@ FAKER FOUND
   - Port 25565: connections to non-existent IPs succeed (...). Something on the network diverts the server port to a proxy: Faker.
 ```
 
-If you get a TLS error (older Windows 10), use this one instead. It also works from Win+R or CMD:
+If `irm` is not recognized (you are in CMD instead of PowerShell) or you get a TLS error (older Windows 10), use this one instead. It works from CMD, Win+R or PowerShell and does not need `irm`:
 
 ```
-powershell -ep bypass -c "[Net.ServicePointManager]::SecurityProtocol='Tls12'; irm https://raw.githubusercontent.com/Elomcraft/antifaker/main/AntiFaker.ps1 | iex"
+powershell -ep bypass -c "[Net.ServicePointManager]::SecurityProtocol='Tls12'; iex (New-Object Net.WebClient).DownloadString('https://raw.githubusercontent.com/Elomcraft/antifaker/main/AntiFaker.ps1')"
 ```
+
+Requires Windows 10 or 11 (Windows 7/8 are not supported).
 
 ### Options
 
